@@ -4,7 +4,6 @@ local config = {
 	fontSize = 20,
 	offsetY = -40,
 	showTypeNames = false,
-	typeNameOnSeparateLine = false,
 }
 
 local configDesc = {
@@ -13,7 +12,6 @@ local configDesc = {
 	fontSize = "Font size of world-space object ID labels",
 	offsetY = "Vertical offset of labels relative to their objects",
 	showTypeNames = "Include the object type alongside its ID",
-	typeNameOnSeparateLine = "When type names are included, show the type name above the ID instead of on the same line",
 }
 
 configDescriptions = configDesc

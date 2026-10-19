@@ -260,12 +260,6 @@ local function drawContents()
 			config.showTypeNames = value
 			rebuild = true
 		end
-		value, changed = rom.ImGui.Checkbox("Type name and ID on separate lines", config.typeNameOnSeparateLine)
-		drawTooltip(configDescriptions.typeNameOnSeparateLine)
-		if changed then
-			config.typeNameOnSeparateLine = value
-			rebuild = true
-		end
 		if rebuild then
 			mod.SyncObjectLabels(true)
 		end

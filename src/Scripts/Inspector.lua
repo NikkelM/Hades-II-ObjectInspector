@@ -15,6 +15,7 @@ local cachedSortMode
 local cachedVersion = -1
 
 mod.ObjectGroups = {}
+mod.CachedObjectTypes = {}
 mod.SelectedObjectTypes = {}
 mod.CurrentMapName = "(current map)"
 mod.ObjectCount = 0
@@ -85,8 +86,9 @@ function mod.RefreshObjects(refreshDistances)
 				activeObjects[id] = name
 				if not groupsByName[name] then
 					local objectType = objectTypes[name]
-					local category = objectType.Category or "Other"
-					local source = objectType.Source or "Uncategorized"
+					local cachedObjectType = mod.CachedObjectTypes[name] or {}
+					local category = objectType.Category or cachedObjectType.Category or "Other"
+					local source = objectType.Source or cachedObjectType.Source or "Uncategorized"
 					groupsByName[name] = {
 						Name = name, SearchName = name:lower(), Ids = {}, IdText = {},
 						Category = category, Source = source,
@@ -365,7 +367,7 @@ function mod.SyncObjectLabels(rebuild)
 			game.CreateTextBox({
 				Id = anchorId,
 				Text = config.showTypeNames
-					and (group.Name .. (config.typeNameOnSeparateLine and "\n" or " ") .. id) or tostring(id),
+					and (group.Name .. " " .. id) or tostring(id),
 				Font = "P22UndergroundSCHeavy", FontSize = config.fontSize,
 				Justification = "CENTER", Color = group.Color,
 				OutlineThickness = 2, OutlineColor = { 0, 0, 0, 1 },
