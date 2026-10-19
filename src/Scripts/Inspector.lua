@@ -18,6 +18,10 @@ mod.ObjectGroups = {}
 mod.SelectedObjectTypes = {}
 mod.CurrentMapName = "(current map)"
 mod.ObjectCount = 0
+-- Leave room in the engine's shared 512-entry text-box pool
+mod.ObjectLabelLimit = 256
+mod.ObjectLabelCount = 0
+mod.ObjectLabelOmittedCount = 0
 mod.ObjectRefreshRequested = true
 mod.ObjectDataVersion = 0
 mod.ObjectSelectionVersion = 0
@@ -25,7 +29,6 @@ mod.ObjectDistances = {}
 mod.ObjectDistanceSort = false
 mod.ExpandedObjectTypes = {}
 mod.DistancePlayerId = nil
-mod.ObjectInspectorTimings = { Refresh = 0, Filter = 0, Distances = 0, Labels = 0 }
 -- #endregion
 
 -- #region Discovery
@@ -61,7 +64,6 @@ end
 
 ---@param refreshDistances boolean|nil
 function mod.RefreshObjects(refreshDistances)
-	local startTime = os.clock()
 	for name in pairs(game.ObstacleData) do
 		mod.RegisterObjectType(name)
 	end
@@ -133,7 +135,6 @@ function mod.RefreshObjects(refreshDistances)
 	mod.ObjectDataVersion = mod.ObjectDataVersion + 1
 	mod.ObjectRefreshRequested = false
 	mod.SyncObjectLabels()
-	mod.ObjectInspectorTimings.Refresh = (os.clock() - startTime) * 1000
 	if refreshDistances then
 		mod.RefreshObjectDistances()
 	end
@@ -141,7 +142,6 @@ end
 
 ---@param openedGroup ObjectInspectorGroup|nil
 function mod.RefreshObjectDistances(openedGroup)
-	local startTime = os.clock()
 	local hero = game.CurrentRun and game.CurrentRun.Hero
 	local playerId = hero and hero.ObjectId
 	if not openedGroup or mod.DistancePlayerId ~= playerId then
@@ -171,7 +171,6 @@ function mod.RefreshObjectDistances(openedGroup)
 		end
 	end
 	cachedVersion = -1
-	mod.ObjectInspectorTimings.Distances = (os.clock() - startTime) * 1000
 end
 
 ---@param filter string
@@ -182,7 +181,6 @@ function mod.GetObjectGroups(filter, sortMode)
 	if filter == cachedFilter and sortMode == cachedSortMode and cachedVersion == mod.ObjectDataVersion then
 		return cachedGroups
 	end
-	local startTime = os.clock()
 	local result = {}
 	local distanceSort = sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
 	local searchIds = filter:match("^%d+$") ~= nil
@@ -225,7 +223,6 @@ function mod.GetObjectGroups(filter, sortMode)
 	end)
 	cachedGroups, cachedFilter, cachedSortMode = result, filter, sortMode
 	cachedVersion = mod.ObjectDataVersion
-	mod.ObjectInspectorTimings.Filter = (os.clock() - startTime) * 1000
 	return cachedGroups
 end
 -- #endregion
@@ -288,12 +285,22 @@ end
 -- #endregion
 
 -- #region Labels
+local function destroyObjectLabel(id, label)
+	-- Release the text slot immediately rather than waiting for obstacle disposal
+	game.DestroyTextBox({ Id = label.AnchorId })
+	game.Destroy({ Id = label.AnchorId })
+	labelIds[label.AnchorId] = nil
+	labels[id] = nil
+end
+
 function mod.ClearObjectLabels()
-	for _, label in pairs(labels) do
-		game.Destroy({ Id = label.AnchorId })
+	for id, label in pairs(labels) do
+		destroyObjectLabel(id, label)
 	end
 	labels = {}
 	labelIds = {}
+	mod.ObjectLabelCount = 0
+	mod.ObjectLabelOmittedCount = 0
 end
 
 function mod.ResetObjectInspectorMap()
@@ -310,56 +317,71 @@ function mod.ResetObjectInspectorMap()
 	cachedGroups = {}
 	cachedVersion = -1
 	mod.ObjectCount = 0
+	mod.ObjectLabelCount = 0
+	mod.ObjectLabelOmittedCount = 0
 	mod.CurrentMapName = "(loading map)"
 	mod.ObjectRefreshRequested = true
 end
 
 ---@param rebuild boolean|nil
 function mod.SyncObjectLabels(rebuild)
-	local startTime = os.clock()
+	local previousOmittedCount = mod.ObjectLabelOmittedCount
 	if rebuild or not config.enabled then
 		mod.ClearObjectLabels()
 	end
 	if not config.enabled then
-		mod.ObjectInspectorTimings.Labels = (os.clock() - startTime) * 1000
 		return
 	end
 
-	local wantedLabels = {}
+	local activeIds = {}
 	for id, group in pairs(selectedObjectIds) do
 		if game.GetName({ Id = id }) == group.Name then
-			wantedLabels[id] = true
-			if not labels[id] then
-				local anchorId = game.SpawnObstacle({
-					Name = "BlankObstacleNoTimeModifier", Group = "Combat_UI_Backing",
-					DestinationId = id, TriggerOnSpawn = false,
-				})
-				assert(anchorId and anchorId > 0, "Object Inspector could not create a label anchor")
-				labels[id] = { AnchorId = anchorId }
-				labelIds[anchorId] = true
-				game.Attach({ Id = anchorId, DestinationId = id, OffsetY = config.offsetY })
-				game.CreateTextBox({
-					Id = anchorId,
-					Text = config.showTypeNames
-						and (group.Name .. (config.typeNameOnSeparateLine and "\n" or " ") .. id) or tostring(id),
-					Font = "P22UndergroundSCHeavy", FontSize = config.fontSize,
-					Justification = "CENTER", Color = group.Color,
-					OutlineThickness = 2, OutlineColor = { 0, 0, 0, 1 },
-					ShadowColor = { 0, 0, 0, 1 }, ShadowAlpha = 1,
-					ShadowOffset = { 0, 2 },
-					DataProperties = { LocationZWithOwner = true },
-				})
-			end
+			table.insert(activeIds, id)
 		end
+	end
+	table.sort(activeIds)
+	local labelCount = math.min(#activeIds, mod.ObjectLabelLimit)
+	local wantedLabels = {}
+	for index = 1, labelCount do
+		wantedLabels[activeIds[index]] = true
 	end
 	for id, label in pairs(labels) do
 		if not wantedLabels[id] then
-			game.Destroy({ Id = label.AnchorId })
-			labelIds[label.AnchorId] = nil
-			labels[id] = nil
+			destroyObjectLabel(id, label)
 		end
 	end
-	mod.ObjectInspectorTimings.Labels = (os.clock() - startTime) * 1000
+	for index = 1, labelCount do
+		local id = activeIds[index]
+		local group = selectedObjectIds[id]
+		if not labels[id] then
+			local anchorId = game.SpawnObstacle({
+				Name = "BlankObstacleNoTimeModifier", Group = "Combat_UI_Backing",
+				DestinationId = id, TriggerOnSpawn = false,
+			})
+			assert(anchorId and anchorId > 0, "Object Inspector could not create a label anchor")
+			labels[id] = { AnchorId = anchorId }
+			labelIds[anchorId] = true
+			game.Attach({ Id = anchorId, DestinationId = id, OffsetY = config.offsetY })
+			game.CreateTextBox({
+				Id = anchorId,
+				Text = config.showTypeNames
+					and (group.Name .. (config.typeNameOnSeparateLine and "\n" or " ") .. id) or tostring(id),
+				Font = "P22UndergroundSCHeavy", FontSize = config.fontSize,
+				Justification = "CENTER", Color = group.Color,
+				OutlineThickness = 2, OutlineColor = { 0, 0, 0, 1 },
+				ShadowColor = { 0, 0, 0, 1 }, ShadowAlpha = 1,
+				ShadowOffset = { 0, 2 },
+				DataProperties = { LocationZWithOwner = true },
+			})
+		end
+	end
+	mod.ObjectLabelCount = labelCount
+	mod.ObjectLabelOmittedCount = #activeIds - labelCount
+	if mod.ObjectLabelOmittedCount > 0 and previousOmittedCount == 0 then
+		rom.log.warning("Object Inspector | World label limit " .. mod.ObjectLabelLimit
+			.. " reached: " .. mod.ObjectLabelOmittedCount .. " additional selected IDs have no label"
+			.. " (lowest IDs shown first); selection and logging are unaffected")
+	end
 end
 -- #endregion
 

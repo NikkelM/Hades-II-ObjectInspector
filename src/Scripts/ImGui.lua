@@ -14,8 +14,6 @@ local rowGroups
 local rowsDirty = true
 local rowSelectionVersion = -1
 local clipper = rom.ImGuiListClipper.new()
-local renderedRows = 0
-local drawMilliseconds = 0
 
 local function drawTooltip(description)
 	if rom.ImGui.IsItemHovered() then
@@ -174,7 +172,7 @@ local function drawObjectRow(row)
 		end
 		rom.ImGui.SameLine()
 		local distance = mod.ObjectDistances[id]
-		local text = distance and string.format("%.0f units", distance) or "Distance unavailable - refresh"
+		local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable - refresh"
 		local cursorX = rom.ImGui.GetCursorPosX()
 		local availableWidth = rom.ImGui.GetContentRegionAvail()
 		local textWidth = rom.ImGui.CalcTextSize(text)
@@ -215,13 +213,11 @@ local function drawObjectList(groups)
 	if rowsDirty or rowGroups ~= groups or rowSelectionVersion ~= mod.ObjectSelectionVersion then
 		rebuildRows(groups)
 	end
-	renderedRows = 0
 	if rom.ImGui.BeginChild("Object types", 0, 0, true) then
 		clipper:Begin(#rows, rom.ImGui.GetFrameHeightWithSpacing())
 		while clipper:Step() do
 			for index = clipper.DisplayStart + 1, clipper.DisplayEnd do
 				drawObjectRow(rows[index])
-				renderedRows = renderedRows + 1
 			end
 		end
 	end
@@ -239,46 +235,11 @@ local function drawContents()
 	end
 
 	local value
-	value, changed = rom.ImGui.Checkbox("Refresh when opened", config.autoRefreshOnOpen)
-	drawTooltip(configDescriptions.autoRefreshOnOpen)
+	value, changed = rom.ImGui.Checkbox("Set player invulnerable", mod.PlayerInvulnerable)
+	drawTooltip("Session-only debug setting: use normal player invulnerability and log blocked hits; pure damage can bypass it")
 	if changed then
-		config.autoRefreshOnOpen = value
+		mod.SetPlayerInvulnerability(value)
 	end
-	mod.PlayerInvulnerable = rom.ImGui.Checkbox("Set player invulnerable", mod.PlayerInvulnerable)
-	drawTooltip("Session-only debug setting: skip player damage and log a warning for each blocked hit")
-	if rom.ImGui.Button("Refresh now") then
-		mod.RefreshObjects(true)
-	end
-	rom.ImGui.Text(mod.CurrentMapName .. " | " .. mod.ObjectCount .. " objects | " .. #mod.ObjectGroups .. " types")
-	rom.ImGui.Text("Distances to player ID " .. tostring(mod.DistancePlayerId or "(unavailable)") .. " are snapshots")
-	if mod.ObjectRefreshRequested then
-		rom.ImGui.Text("Map objects changed - refresh to update the list")
-	end
-
-	filter = rom.ImGui.InputText("Filter type, ID, category or file", filter, 256)
-	if rom.ImGui.BeginCombo("Sort", sortMode) then
-		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)", "Distance (closest first)", "Distance (farthest first)" }) do
-			if rom.ImGui.Selectable(option, sortMode == option) then
-				sortMode = option
-				config.sortMode = option
-				local distanceSort = option == "Distance (closest first)" or option == "Distance (farthest first)"
-				local needsSnapshot = distanceSort and not mod.ObjectDistanceSort
-				mod.ObjectDistanceSort = distanceSort
-				if needsSnapshot then
-					mod.RefreshObjectDistances()
-				end
-			end
-		end
-		rom.ImGui.EndCombo()
-	end
-
-	if rom.ImGui.CollapsingHeader("Performance") then
-		local timings = mod.ObjectInspectorTimings
-		rom.ImGui.Text(string.format("Draw: %.2f ms | %d / %d rows submitted", drawMilliseconds, renderedRows, #rows))
-		rom.ImGui.Text(string.format("Last discovery: %.2f ms | filter/sort: %.2f ms", timings.Refresh, timings.Filter))
-		rom.ImGui.Text(string.format("Last distance snapshot: %.2f ms | label sync: %.2f ms", timings.Distances, timings.Labels))
-	end
-
 	if rom.ImGui.CollapsingHeader("Label settings") then
 		local rebuild = false
 		value, changed = rom.ImGui.SliderInt("Font size", config.fontSize, 10, 48)
@@ -310,6 +271,38 @@ local function drawContents()
 		end
 	end
 
+	rom.ImGui.Text(mod.CurrentMapName .. " | " .. mod.ObjectCount .. " objects | " .. #mod.ObjectGroups .. " types")
+	rom.ImGui.Text("World labels: " .. mod.ObjectLabelCount .. " / " .. mod.ObjectLabelLimit .. " (lowest selected IDs first)")
+	if mod.ObjectLabelOmittedCount > 0 then
+		rom.ImGui.TextColored(1, 0.75, 0.25, 1,
+			"World label limit reached: " .. mod.ObjectLabelOmittedCount .. " additional selected IDs")
+		drawTooltip("The world label cap leaves room in the game's shared text-box pool; selection and console logging remain unlimited")
+	end
+	if mod.ObjectRefreshRequested then
+		rom.ImGui.Text("Map objects changed - refresh to update the list")
+	end
+
+	filter = rom.ImGui.InputText("Filter type, ID, category or file", filter, 256)
+	if rom.ImGui.BeginCombo("Sort", sortMode) then
+		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)", "Distance (closest first)", "Distance (farthest first)" }) do
+			if rom.ImGui.Selectable(option, sortMode == option) then
+				sortMode = option
+				config.sortMode = option
+				local distanceSort = option == "Distance (closest first)" or option == "Distance (farthest first)"
+				local needsSnapshot = distanceSort and not mod.ObjectDistanceSort
+				mod.ObjectDistanceSort = distanceSort
+				if needsSnapshot then
+					mod.RefreshObjectDistances()
+				end
+			end
+		end
+		rom.ImGui.EndCombo()
+	end
+
+	if rom.ImGui.Button("Refresh list") then
+		mod.RefreshObjects(true)
+	end
+	rom.ImGui.SameLine()
 	local groups = mod.GetObjectGroups(filter, sortMode)
 	if rom.ImGui.Button("Show filtered types") then
 		mod.SelectObjectTypes(groups, true)
@@ -349,20 +342,14 @@ rom.gui.add_always_draw_imgui(function()
 		visible = rom.ImGui.Begin(windowName)
 		if visible then
 			local opening = not wasVisible
-			local refreshed = false
-			if config.autoRefreshOnOpen and (not wasVisible or lastMapName ~= mod.CurrentMapName) then
+			if opening or lastMapName ~= mod.CurrentMapName then
 				mod.RefreshObjects()
-				refreshed = true
-			end
-			if opening then
-				resetExpandedGroups()
-			end
-			if opening or refreshed then
+				if opening then
+					resetExpandedGroups()
+				end
 				mod.RefreshObjectDistances()
 			end
-			local startTime = os.clock()
 			drawContents()
-			drawMilliseconds = (os.clock() - startTime) * 1000
 			rom.ImGui.End()
 		end
 	end
