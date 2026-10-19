@@ -45,6 +45,7 @@ local function on_ready()
 	mod = modutil.mod.Mod.Register(_PLUGIN.guid)
 	mod.ConfigDescriptions = configDescriptions
 
+	import "Scripts/Utils.lua"
 	import "Scripts/Inspector.lua"
 	import "Scripts/SjsonHooks.lua"
 	import "Scripts/RoomLogic.lua"

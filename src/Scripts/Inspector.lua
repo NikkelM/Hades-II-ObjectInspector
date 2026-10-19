@@ -1,4 +1,4 @@
----@alias ObjectInspectorGroup { Name: string, SearchName: string, Ids: integer[], IdText: table<integer, string>, Color: number[], SelectedCount: integer }
+---@alias ObjectInspectorGroup { Name: string, SearchName: string, SearchText: string, Category: string, Source: string, Ids: integer[], IdText: table<integer, string>, Color: number[], SelectedCount: integer, NearestDistance: number|nil }
 
 -- #region State
 local objectTypes = {}
@@ -20,7 +20,9 @@ mod.CurrentMapName = "(current map)"
 mod.ObjectCount = 0
 mod.ObjectRefreshRequested = true
 mod.ObjectDataVersion = 0
+mod.ObjectSelectionVersion = 0
 mod.ObjectDistances = {}
+mod.ObjectDistanceSort = false
 mod.ExpandedObjectTypes = {}
 mod.DistancePlayerId = nil
 mod.ObjectInspectorTimings = { Refresh = 0, Filter = 0, Distances = 0, Labels = 0 }
@@ -28,8 +30,17 @@ mod.ObjectInspectorTimings = { Refresh = 0, Filter = 0, Distances = 0, Labels = 
 
 -- #region Discovery
 ---@param name string
-function mod.RegisterObjectType(name)
-	objectTypes[name] = true
+---@param category string|nil
+---@param source string|nil
+function mod.RegisterObjectType(name, category, source)
+	local objectType = objectTypes[name]
+	if not objectType then
+		objectType = {}
+		objectTypes[name] = objectType
+	end
+	-- Keep the original definition source when another file overrides the type
+	objectType.Category = objectType.Category or category
+	objectType.Source = objectType.Source or source
 end
 
 local function getObjectTypeColor(name)
@@ -71,8 +82,13 @@ function mod.RefreshObjects(refreshDistances)
 			if name ~= "" then
 				activeObjects[id] = name
 				if not groupsByName[name] then
+					local objectType = objectTypes[name]
+					local category = objectType.Category or "Other"
+					local source = objectType.Source or "Uncategorized"
 					groupsByName[name] = {
 						Name = name, SearchName = name:lower(), Ids = {}, IdText = {},
+						Category = category, Source = source,
+						SearchText = (name .. " " .. category .. " " .. source):lower(),
 						Color = getObjectTypeColor(name), SelectedCount = 0,
 					}
 				end
@@ -91,6 +107,10 @@ function mod.RefreshObjects(refreshDistances)
 		mod.ObjectCount = mod.ObjectCount + #group.Ids
 		for _, id in ipairs(group.Ids) do
 			groupsById[id] = group
+			local distance = mod.ObjectDistances[id]
+			if distance and (not group.NearestDistance or distance < group.NearestDistance) then
+				group.NearestDistance = distance
+			end
 			if mod.IsObjectSelected(group.Name, id) then
 				selectedObjectIds[id] = group
 				group.SelectedCount = group.SelectedCount + 1
@@ -126,22 +146,31 @@ function mod.RefreshObjectDistances(openedGroup)
 	local playerId = hero and hero.ObjectId
 	if not openedGroup or mod.DistancePlayerId ~= playerId then
 		mod.ObjectDistances = {}
+		for _, group in ipairs(mod.ObjectGroups) do
+			group.NearestDistance = nil
+		end
 	end
 	mod.DistancePlayerId = playerId
 	if mod.DistancePlayerId then
 		for _, group in ipairs(openedGroup and { openedGroup } or mod.ObjectGroups) do
-			if openedGroup or mod.ExpandedObjectTypes[group.Name] then
+			if openedGroup or mod.ObjectDistanceSort or mod.ExpandedObjectTypes[group.Name] then
+				group.NearestDistance = nil
 				for _, id in ipairs(group.Ids) do
 					mod.ObjectDistances[id] = nil
 					if game.GetName({ Id = id }) == group.Name then
-						mod.ObjectDistances[id] = string.format("%.0f units", game.GetDistance({
+						local distance = game.GetDistance({
 							Id = id, DestinationId = mod.DistancePlayerId,
-						}))
+						})
+						mod.ObjectDistances[id] = distance
+						if not group.NearestDistance or distance < group.NearestDistance then
+							group.NearestDistance = distance
+						end
 					end
 				end
 			end
 		end
 	end
+	cachedVersion = -1
 	mod.ObjectInspectorTimings.Distances = (os.clock() - startTime) * 1000
 end
 
@@ -155,9 +184,10 @@ function mod.GetObjectGroups(filter, sortMode)
 	end
 	local startTime = os.clock()
 	local result = {}
+	local distanceSort = sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
 	local searchIds = filter:match("^%d+$") ~= nil
 	for _, group in ipairs(mod.ObjectGroups) do
-		local matches = group.SearchName:find(filter, 1, true) ~= nil
+		local matches = group.SearchText:find(filter, 1, true) ~= nil
 		if not matches and searchIds then
 			for _, id in ipairs(group.Ids) do
 				if group.IdText[id]:find(filter, 1, true) then
@@ -171,7 +201,16 @@ function mod.GetObjectGroups(filter, sortMode)
 		end
 	end
 	table.sort(result, function(a, b)
-		if sortMode == "ID (newest first)" and a.Ids[#a.Ids] ~= b.Ids[#b.Ids] then
+		if distanceSort and a.NearestDistance ~= b.NearestDistance then
+			if a.NearestDistance == nil then
+				return false
+			elseif b.NearestDistance == nil then
+				return true
+			elseif sortMode == "Distance (closest first)" then
+				return a.NearestDistance < b.NearestDistance
+			end
+			return a.NearestDistance > b.NearestDistance
+		elseif sortMode == "ID (newest first)" and a.Ids[#a.Ids] ~= b.Ids[#b.Ids] then
 			return a.Ids[#a.Ids] > b.Ids[#b.Ids]
 		elseif sortMode == "Count (most first)" and #a.Ids ~= #b.Ids then
 			return #a.Ids > #b.Ids
@@ -213,6 +252,7 @@ function mod.SelectObjectTypes(groups, selected)
 			selectedObjectIds[id] = selected and group or nil
 		end
 	end
+	mod.ObjectSelectionVersion = mod.ObjectSelectionVersion + 1
 	mod.SyncObjectLabels()
 end
 
@@ -226,6 +266,7 @@ function mod.SelectObjectId(id, selected)
 	if wasSelected ~= selected then
 		group.SelectedCount = group.SelectedCount + (selected and 1 or -1)
 	end
+	mod.ObjectSelectionVersion = mod.ObjectSelectionVersion + 1
 	mod.SyncObjectLabels()
 end
 
@@ -236,6 +277,7 @@ function mod.HideAllObjects()
 	for _, group in ipairs(mod.ObjectGroups) do
 		group.SelectedCount = 0
 	end
+	mod.ObjectSelectionVersion = mod.ObjectSelectionVersion + 1
 	mod.ClearObjectLabels()
 end
 
@@ -298,7 +340,8 @@ function mod.SyncObjectLabels(rebuild)
 				game.Attach({ Id = anchorId, DestinationId = id, OffsetY = config.offsetY })
 				game.CreateTextBox({
 					Id = anchorId,
-					Text = config.showTypeNames and (group.Name .. " " .. id) or tostring(id),
+					Text = config.showTypeNames
+						and (group.Name .. (config.typeNameOnSeparateLine and "\n" or " ") .. id) or tostring(id),
 					Font = "P22UndergroundSCHeavy", FontSize = config.fontSize,
 					Justification = "CENTER", Color = group.Color,
 					OutlineThickness = 2, OutlineColor = { 0, 0, 0, 1 },
@@ -328,15 +371,19 @@ function mod.LogObjects(groups, selectedOnly)
 	local count = 0
 	for _, group in ipairs(groups) do
 		local ids = {}
+		local groupCount = 0
 		for _, id in ipairs(group.Ids) do
 			if (not selectedOnly or mod.IsObjectSelected(group.Name, id))
 				and game.GetName({ Id = id }) == group.Name then
-				table.insert(ids, tostring(id))
+				local location = game.GetLocation({ Id = id })
+				ids[id] = { X = location.X, Y = location.Y }
+				groupCount = groupCount + 1
 			end
 		end
-		if #ids > 0 then
-			rom.log.info(group.Name .. " (" .. #ids .. "): " .. table.concat(ids, ", "))
-			count = count + #ids
+		if groupCount > 0 then
+			rom.log.info(group.Name .. " (" .. groupCount .. ")")
+			mod.PrintTable(ids)
+			count = count + groupCount
 		end
 	end
 	rom.log.info("Object Inspector | " .. count .. " active object IDs logged")

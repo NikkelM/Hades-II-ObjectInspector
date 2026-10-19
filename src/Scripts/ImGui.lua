@@ -2,36 +2,169 @@ local windowName = "Object Inspector"
 local configDescriptions = mod.ConfigDescriptions
 local wasVisible = false
 local filter = ""
-local sortMode = "Count (most first)"
+local sortMode = config.sortMode
+mod.ObjectDistanceSort = sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
 local lastRefresh = 0
 local lastMapName
 local expandedTypes = mod.ExpandedObjectTypes
+local expandedCategories = {}
+local expandedSources = {}
 local rows = {}
 local rowGroups
 local rowsDirty = true
+local rowSelectionVersion = -1
 local clipper = rom.ImGuiListClipper.new()
 local renderedRows = 0
 local drawMilliseconds = 0
 
+local function drawTooltip(description)
+	if rom.ImGui.IsItemHovered() then
+		rom.ImGui.SetNextWindowSize(420, 0)
+		rom.ImGui.BeginTooltip()
+		rom.ImGui.TextWrapped(description)
+		rom.ImGui.EndTooltip()
+	end
+end
+
 -- #region Object list
+local function resetExpandedGroups()
+	expandedCategories = {}
+	expandedSources = {}
+	for name in pairs(expandedTypes) do
+		expandedTypes[name] = nil
+	end
+	for _, group in ipairs(mod.ObjectGroups) do
+		if group.SelectedCount > 0 then
+			expandedCategories[group.Category] = true
+			expandedSources[group.Category .. ":" .. group.Source] = true
+			expandedTypes[group.Name] = true
+		end
+	end
+	rowsDirty = true
+end
+
+local function appendObjectRows(group)
+	table.insert(rows, { Group = group })
+	if expandedTypes[group.Name] then
+		local ids = group.Ids
+		if mod.ObjectDistanceSort then
+			ids = {}
+			for _, id in ipairs(group.Ids) do
+				table.insert(ids, id)
+			end
+			table.sort(ids, function(a, b)
+				local left, right = mod.ObjectDistances[a], mod.ObjectDistances[b]
+				if left ~= right then
+					if left == nil then
+						return false
+					elseif right == nil then
+						return true
+					elseif sortMode == "Distance (closest first)" then
+						return left < right
+					end
+					return left > right
+				end
+				return a < b
+			end)
+		end
+		for index = 1, #ids do
+			local idIndex = sortMode == "ID (newest first)" and (#ids - index + 1) or index
+			local id = ids[idIndex]
+			table.insert(rows, { Group = group, Id = id })
+		end
+	end
+end
+
 local function rebuildRows(groups)
 	rows = {}
+	local categories = {}
 	for _, group in ipairs(groups) do
-		table.insert(rows, { Group = group })
-		if expandedTypes[group.Name] then
-			for index = 1, #group.Ids do
-				local idIndex = sortMode == "ID (newest first)" and (#group.Ids - index + 1) or index
-				local id = group.Ids[idIndex]
-				table.insert(rows, { Group = group, Id = id })
+		local category = categories[group.Category]
+		if not category then
+			category = { Sources = {}, Groups = {}, ObjectCount = 0, SelectedCount = 0 }
+			categories[group.Category] = category
+		end
+		table.insert(category.Groups, group)
+		category.ObjectCount = category.ObjectCount + #group.Ids
+		category.SelectedCount = category.SelectedCount + group.SelectedCount
+		local source = category.Sources[group.Source]
+		if not source then
+			source = { Groups = {}, ObjectCount = 0, SelectedCount = 0 }
+			category.Sources[group.Source] = source
+		end
+		table.insert(source.Groups, group)
+		source.ObjectCount = source.ObjectCount + #group.Ids
+		source.SelectedCount = source.SelectedCount + group.SelectedCount
+	end
+	for _, name in ipairs({ "Obstacles", "Units", "Other" }) do
+		local category = categories[name]
+		if category then
+			table.insert(rows, {
+				Category = name,
+				Groups = category.Groups, ObjectCount = category.ObjectCount, SelectedCount = category.SelectedCount,
+				Label = name .. " (" .. #category.Groups .. " types, " .. category.ObjectCount
+					.. " objects, " .. category.SelectedCount .. " selected)",
+			})
+			if expandedCategories[name] == true then
+				local sourceNames = {}
+				for source in pairs(category.Sources) do
+					table.insert(sourceNames, source)
+				end
+				table.sort(sourceNames)
+				for _, sourceName in ipairs(sourceNames) do
+					local source = category.Sources[sourceName]
+					table.insert(rows, {
+						Category = name, Source = sourceName,
+						Groups = source.Groups, ObjectCount = source.ObjectCount, SelectedCount = source.SelectedCount,
+						Label = sourceName .. " (" .. #source.Groups .. " types, " .. source.ObjectCount
+							.. " objects, " .. source.SelectedCount .. " selected)",
+					})
+					if expandedSources[name .. ":" .. sourceName] == true then
+						for _, group in ipairs(source.Groups) do
+							appendObjectRows(group)
+						end
+					end
+				end
 			end
 		end
 	end
 	rowGroups = groups
+	rowSelectionVersion = mod.ObjectSelectionVersion
 	rowsDirty = false
 end
 
 local function drawObjectRow(row)
+	if not row.Group then
+		local key = row.Category .. (row.Source and (":" .. row.Source) or "")
+		local states = row.Source and expandedSources or expandedCategories
+		local expanded = states[key] == true
+		rom.ImGui.PushID(key)
+		if row.Source then
+			rom.ImGui.Indent()
+		end
+		local selected, changed = rom.ImGui.Checkbox("##group", row.SelectedCount == row.ObjectCount)
+		drawTooltip("Select or deselect all types in this group matching the current filter")
+		if changed then
+			mod.SelectObjectTypes(row.Groups, selected)
+		end
+		rom.ImGui.SameLine()
+		rom.ImGui.SetNextItemOpen(expanded)
+		local value = rom.ImGui.TreeNodeEx(row.Label .. "###category",
+			rom.ImGuiTreeNodeFlags.NoTreePushOnOpen + rom.ImGuiTreeNodeFlags.FramePadding)
+		if value ~= expanded then
+			states[key] = value
+			rowsDirty = true
+		end
+		if row.Source then
+			rom.ImGui.Unindent()
+		end
+		rom.ImGui.PopID()
+		return
+	end
+
 	local group, id = row.Group, row.Id
+	rom.ImGui.Indent()
+	rom.ImGui.Indent()
 	rom.ImGui.PushID(group.Name)
 	if id then
 		rom.ImGui.Indent()
@@ -40,7 +173,13 @@ local function drawObjectRow(row)
 			mod.SelectObjectId(id, selected)
 		end
 		rom.ImGui.SameLine()
-		rom.ImGui.Text(mod.ObjectDistances[id] or "Distance unavailable - refresh")
+		local distance = mod.ObjectDistances[id]
+		local text = distance and string.format("%.0f units", distance) or "Distance unavailable - refresh"
+		local cursorX = rom.ImGui.GetCursorPosX()
+		local availableWidth = rom.ImGui.GetContentRegionAvail()
+		local textWidth = rom.ImGui.CalcTextSize(text)
+		rom.ImGui.SetCursorPosX(math.max(cursorX, cursorX + availableWidth - textWidth))
+		rom.ImGui.Text(text)
 		rom.ImGui.Unindent()
 	else
 		local color = group.Color
@@ -68,10 +207,12 @@ local function drawObjectRow(row)
 		end
 	end
 	rom.ImGui.PopID()
+	rom.ImGui.Unindent()
+	rom.ImGui.Unindent()
 end
 
 local function drawObjectList(groups)
-	if rowsDirty or rowGroups ~= groups then
+	if rowsDirty or rowGroups ~= groups or rowSelectionVersion ~= mod.ObjectSelectionVersion then
 		rebuildRows(groups)
 	end
 	renderedRows = 0
@@ -88,15 +229,6 @@ local function drawObjectList(groups)
 end
 -- #endregion
 
-local function drawTooltip(description)
-	if rom.ImGui.IsItemHovered() then
-		rom.ImGui.SetNextWindowSize(420, 0)
-		rom.ImGui.BeginTooltip()
-		rom.ImGui.TextWrapped(description)
-		rom.ImGui.EndTooltip()
-	end
-end
-
 -- #region Controls
 local function drawContents()
 	local enabled, changed = rom.ImGui.Checkbox("Show selected IDs", config.enabled)
@@ -112,12 +244,10 @@ local function drawContents()
 	if changed then
 		config.autoRefreshOnOpen = value
 	end
+	mod.PlayerInvulnerable = rom.ImGui.Checkbox("Set player invulnerable", mod.PlayerInvulnerable)
+	drawTooltip("Session-only debug setting: skip player damage and log a warning for each blocked hit")
 	if rom.ImGui.Button("Refresh now") then
 		mod.RefreshObjects(true)
-	end
-	rom.ImGui.SameLine()
-	if rom.ImGui.Button("Deselect all") then
-		mod.HideAllObjects()
 	end
 	rom.ImGui.Text(mod.CurrentMapName .. " | " .. mod.ObjectCount .. " objects | " .. #mod.ObjectGroups .. " types")
 	rom.ImGui.Text("Distances to player ID " .. tostring(mod.DistancePlayerId or "(unavailable)") .. " are snapshots")
@@ -125,11 +255,18 @@ local function drawContents()
 		rom.ImGui.Text("Map objects changed - refresh to update the list")
 	end
 
-	filter = rom.ImGui.InputText("Filter type or ID", filter, 256)
+	filter = rom.ImGui.InputText("Filter type, ID, category or file", filter, 256)
 	if rom.ImGui.BeginCombo("Sort", sortMode) then
-		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)" }) do
+		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)", "Distance (closest first)", "Distance (farthest first)" }) do
 			if rom.ImGui.Selectable(option, sortMode == option) then
 				sortMode = option
+				config.sortMode = option
+				local distanceSort = option == "Distance (closest first)" or option == "Distance (farthest first)"
+				local needsSnapshot = distanceSort and not mod.ObjectDistanceSort
+				mod.ObjectDistanceSort = distanceSort
+				if needsSnapshot then
+					mod.RefreshObjectDistances()
+				end
 			end
 		end
 		rom.ImGui.EndCombo()
@@ -162,6 +299,12 @@ local function drawContents()
 			config.showTypeNames = value
 			rebuild = true
 		end
+		value, changed = rom.ImGui.Checkbox("Type name and ID on separate lines", config.typeNameOnSeparateLine)
+		drawTooltip(configDescriptions.typeNameOnSeparateLine)
+		if changed then
+			config.typeNameOnSeparateLine = value
+			rebuild = true
+		end
 		if rebuild then
 			mod.SyncObjectLabels(true)
 		end
@@ -180,6 +323,9 @@ local function drawContents()
 		mod.LogObjects(mod.ObjectGroups, true)
 	end
 
+	if rom.ImGui.Button("Deselect all") then
+		mod.HideAllObjects()
+	end
 	drawObjectList(groups)
 end
 -- #endregion
@@ -198,13 +344,20 @@ end)
 rom.gui.add_always_draw_imgui(function()
 	local visible = false
 	if rom.gui.is_open() then
-		rom.ImGui.SetNextWindowSize(720, 600, rom.ImGuiCond.FirstUseEver)
+		rom.ImGui.SetNextWindowSize(720, 850, rom.ImGuiCond.FirstUseEver)
 		-- Managed Begin handles End itself when collapsed and skips Begin when closed
 		visible = rom.ImGui.Begin(windowName)
 		if visible then
+			local opening = not wasVisible
+			local refreshed = false
 			if config.autoRefreshOnOpen and (not wasVisible or lastMapName ~= mod.CurrentMapName) then
-				mod.RefreshObjects(true)
-			elseif not wasVisible then
+				mod.RefreshObjects()
+				refreshed = true
+			end
+			if opening then
+				resetExpandedGroups()
+			end
+			if opening or refreshed then
 				mod.RefreshObjectDistances()
 			end
 			local startTime = os.clock()
