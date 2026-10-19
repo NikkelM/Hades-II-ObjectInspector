@@ -1,0 +1,42 @@
+[config]
+schemaVersion = "0.0.1"
+
+[package]
+namespace = "NikkelM"
+name = "Object_Inspector"
+versionNumber = "0.1.0"
+description = "Hades II developer tool to inspect active obstacles and units on any map by showing their ObjectIds next to them. Can also log more details to the console. Allows searching and filtering by type and ID."
+websiteUrl = "https://github.com/NikkelM/Hades-II-ObjectInspector"
+containsNsfwContent = false
+
+[package.dependencies]
+Hell2Modding-Hell2Modding = "1.0.116"
+LuaENVY-ENVY = "1.2.0"
+SGG_Modding-Chalk = "2.1.2"
+SGG_Modding-ReLoad = "1.0.3"
+SGG_Modding-SJSON = "1.0.2"
+SGG_Modding-ModUtil = "4.0.1"
+
+[build]
+icon = "./icon.png"
+readme = "./README.md"
+outdir = "./build"
+
+[[build.copy]]
+source = "./CHANGELOG.md"
+target = "./CHANGELOG.md"
+
+[[build.copy]]
+source = "./LICENSE"
+target = "./LICENSE"
+
+[[build.copy]]
+source = "./src"
+target = "./plugins"
+
+[publish]
+repository = "https://thunderstore.io"
+communities = ["hades-ii"]
+
+[publish.categories]
+hades-ii = [ "mods", "tools", "ai-generated" ]
