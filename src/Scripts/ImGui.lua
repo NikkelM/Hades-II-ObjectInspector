@@ -271,19 +271,20 @@ local function drawContents()
 		end
 	end
 
-	rom.ImGui.Text(mod.CurrentMapName .. " | " .. mod.ObjectCount .. " objects | " .. #mod.ObjectGroups .. " types")
-	rom.ImGui.Text("World labels: " .. mod.ObjectLabelCount .. " / " .. mod.ObjectLabelLimit .. " (lowest selected IDs first)")
+	rom.ImGui.Text("Room " .. mod.CurrentMapName .. " has " .. mod.ObjectCount .. " objects with " .. #mod.ObjectGroups .. " types")
+	local labelStatus = mod.ObjectLabelCount .. "/" .. mod.ObjectLabelLimit .. " labels are shown, limited by the engine"
 	if mod.ObjectLabelOmittedCount > 0 then
-		rom.ImGui.TextColored(1, 0.75, 0.25, 1,
-			"World label limit reached: " .. mod.ObjectLabelOmittedCount .. " additional selected IDs")
-		drawTooltip("The world label cap leaves room in the game's shared text-box pool; selection and console logging remain unlimited")
+		labelStatus = labelStatus .. " (" .. mod.ObjectLabelOmittedCount .. " additional objects selected)"
 	end
+	rom.ImGui.Text(labelStatus)
+	drawTooltip("The world label cap leaves room in the game's shared text-box pool; lowest selected IDs are shown first, and selection and console logging remain unlimited")
 	if mod.ObjectRefreshRequested then
 		rom.ImGui.Text("Map objects changed - refresh to update the list")
 	end
 
-	filter = rom.ImGui.InputText("Filter type, ID, category or file", filter, 256)
-	if rom.ImGui.BeginCombo("Sort", sortMode) then
+	rom.ImGui.Text("Sort")
+	rom.ImGui.SameLine()
+	if rom.ImGui.BeginCombo("##sort", sortMode) then
 		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)", "Distance (closest first)", "Distance (farthest first)" }) do
 			if rom.ImGui.Selectable(option, sortMode == option) then
 				sortMode = option
@@ -303,20 +304,27 @@ local function drawContents()
 		mod.RefreshObjects(true)
 	end
 	rom.ImGui.SameLine()
+	local showFiltered = rom.ImGui.Button("Show filtered types")
+	rom.ImGui.SameLine()
+	local logFiltered = rom.ImGui.Button("Log filtered")
+	rom.ImGui.SameLine()
+	local logSelected = rom.ImGui.Button("Log selected")
+	rom.ImGui.SameLine()
+	local deselectAll = rom.ImGui.Button("Deselect all")
+
+	rom.ImGui.Text("Filter by type, ID, category or source file:")
+	filter = rom.ImGui.InputText("##filter", filter, 256)
 	local groups = mod.GetObjectGroups(filter, sortMode)
-	if rom.ImGui.Button("Show filtered types") then
+	if showFiltered then
 		mod.SelectObjectTypes(groups, true)
 	end
-	rom.ImGui.SameLine()
-	if rom.ImGui.Button("Log filtered") then
+	if logFiltered then
 		mod.LogObjects(groups, false)
 	end
-	rom.ImGui.SameLine()
-	if rom.ImGui.Button("Log selected") then
+	if logSelected then
 		mod.LogObjects(mod.ObjectGroups, true)
 	end
-
-	if rom.ImGui.Button("Deselect all") then
+	if deselectAll then
 		mod.HideAllObjects()
 	end
 	drawObjectList(groups)
