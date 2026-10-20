@@ -402,9 +402,8 @@ function mod.SyncObjectLabels(rebuild)
 	mod.ObjectLabelCount = labelCount
 	mod.ObjectLabelOmittedCount = #activeIds - labelCount
 	if mod.ObjectLabelOmittedCount > 0 and previousOmittedCount == 0 then
-		rom.log.warning("Object Inspector | World label limit " .. mod.ObjectLabelLimit
-			.. " reached: " .. mod.ObjectLabelOmittedCount .. " additional selected IDs have no label"
-			.. " (lowest IDs shown first); selection and logging are unaffected")
+		rom.log.warning("Object Inspector | Label limit " .. mod.ObjectLabelLimit
+			.. ": " .. mod.ObjectLabelOmittedCount .. " selected IDs not shown")
 	end
 end
 -- #endregion
@@ -432,6 +431,6 @@ function mod.LogObjects(groups, selectedOnly)
 			count = count + groupCount
 		end
 	end
-	rom.log.info("Object Inspector | " .. count .. " active object IDs logged")
+	rom.log.info("Object Inspector | " .. count .. " IDs logged")
 end
 -- #endregion

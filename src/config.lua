@@ -7,11 +7,11 @@ local config = {
 }
 
 local configDesc = {
-	enabled = "Enable object ID labels without changing type or individual selections",
-	sortMode = "Sort order of object types and their IDs in the inspector",
-	fontSize = "Font size of world-space object ID labels",
-	offsetY = "Vertical offset of labels relative to their objects",
-	showTypeNames = "Include the object type alongside its ID",
+	enabled = "Show selected IDs",
+	sortMode = "Sort order",
+	fontSize = "Label font size",
+	offsetY = "Label vertical offset",
+	showTypeNames = "Include type names",
 }
 
 configDescriptions = configDesc

@@ -23,22 +23,22 @@ local function getMapRelationships()
 	return map
 end
 
-local function describeObject(map, id)
+function mod.DescribeRelatedObject(map, id)
 	local object = map.Objects[id]
 	local liveName = game.GetName({ Id = id })
 	local result = {
 		Id = id,
-		Name = object and object.Name or "(not recorded)",
+		Name = object and object.Name or "(unknown)",
 	}
 	if liveName == "" then
-		result.Status = "Not currently present"
+		result.Status = "Not present"
 	elseif object and object.Name == liveName then
 		local location = game.GetLocation({ Id = id })
-		result.Status = "Present with matching type"
+		result.Status = "Present"
 		result.X = location.X
 		result.Y = location.Y
 	else
-		result.Status = object and "Present with a different type" or "Present without an exported record"
+		result.Status = object and "Type mismatch" or "Present"
 		result.LiveName = liveName
 	end
 	if not object then
@@ -51,36 +51,51 @@ local function logRelatedObjects(map, label, ids)
 	rom.log.info(label .. " (" .. #ids .. ")")
 	local objects = {}
 	for _, id in ipairs(ids) do
-		table.insert(objects, describeObject(map, id))
+		table.insert(objects, mod.DescribeRelatedObject(map, id))
 	end
 	mod.PrintTable(objects)
 end
 
 ---@param id integer
 ---@param name string
-function mod.LogObjectRelationships(id, name)
-	if game.GetName({ Id = id }) ~= name then
-		rom.log.warning("Object Inspector | Object " .. id .. " changed or disappeared - refresh the list")
-		return
-	end
+function mod.GetObjectRelationships(id, name)
 	local map = getMapRelationships()
 	if not map then
-		rom.log.warning("Object Inspector | No authored relationship export for room " .. mod.CurrentMapName)
-		return
+		return { Message = "No relationship data for " .. mod.CurrentMapName }
 	end
-	rom.log.info("Object Inspector | Authored map relationships | " .. mod.CurrentMapName .. " | " .. name .. " " .. id)
-	rom.log.info("Static map data - runtime spawning and attachment changes are not reflected")
 	local object = map.Objects[id]
-	if not object then
-		rom.log.info("No relationship record exported for this ID; it may be unrelated, runtime-spawned, or from a changed map")
+	if object and object.Name and object.Name ~= name then
+		return { Message = "Map type mismatch: " .. object.Name .. " / " .. name }
+	end
+	return {
+		Map = map,
+		Object = object,
+		Parents = parentsById[id] or {},
+		Children = object and object.AttachedIDs or {},
+		AttachedTo = object and object.AttachToID and { object.AttachToID } or {},
+		Message = not object and "No map record for " .. id or nil,
+	}
+end
+
+---@param id integer
+---@param name string
+function mod.LogObjectRelationships(id, name)
+	if game.GetName({ Id = id }) ~= name then
+		rom.log.warning("Object Inspector | Object " .. id .. " no longer matches the list")
 		return
 	end
-	if object.Name and object.Name ~= name then
-		rom.log.warning("Object Inspector | Exported type " .. object.Name .. " does not match " .. name .. " - regenerate the map data")
+	local relationships = mod.GetObjectRelationships(id, name)
+	local map = relationships.Map
+	if not map then
+		rom.log.warning("Object Inspector | " .. relationships.Message)
 		return
 	end
-	mod.PrintTable({ Object = describeObject(map, id), Source = map.Source, MapSha256 = map.Sha256 })
-	logRelatedObjects(map, "Parents (authored child lists)", parentsById[id] or {})
-	logRelatedObjects(map, "Children (authored child list)", object.AttachedIDs or {})
-	logRelatedObjects(map, "Attached to (movement)", object.AttachToID and { object.AttachToID } or {})
+	rom.log.info("Object Inspector | Relationships | " .. mod.CurrentMapName .. " | " .. name .. " " .. id)
+	if relationships.Message then
+		rom.log.info(relationships.Message)
+	end
+	mod.PrintTable({ Object = mod.DescribeRelatedObject(map, id), Source = map.Source })
+	logRelatedObjects(map, "Parents", relationships.Parents)
+	logRelatedObjects(map, "Children", relationships.Children)
+	logRelatedObjects(map, "Attached to", relationships.AttachedTo)
 end

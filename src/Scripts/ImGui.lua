@@ -1,5 +1,4 @@
 local windowName = "Object Inspector"
-local configDescriptions = mod.ConfigDescriptions
 local wasVisible = false
 local filter = ""
 local lastRefresh = 0
@@ -7,25 +6,19 @@ local lastMapName
 local expandedTypes = mod.ExpandedObjectTypes
 local expandedCategories = {}
 local expandedSources = {}
+local expandedRelationships = {}
+local relationshipMapName
 local rows = {}
 local rowGroups
 local rowsDirty = true
 local rowSelectionVersion = -1
 local clipper = rom.ImGuiListClipper.new()
 
-local function drawTooltip(description)
-	if rom.ImGui.IsItemHovered() then
-		rom.ImGui.SetNextWindowSize(420, 0)
-		rom.ImGui.BeginTooltip()
-		rom.ImGui.TextWrapped(description)
-		rom.ImGui.EndTooltip()
-	end
-end
-
 -- #region Object list
 local function resetExpandedGroups()
 	expandedCategories = {}
 	expandedSources = {}
+	expandedRelationships = {}
 	for name in pairs(expandedTypes) do
 		expandedTypes[name] = nil
 	end
@@ -37,6 +30,28 @@ local function resetExpandedGroups()
 		end
 	end
 	rowsDirty = true
+end
+
+local function appendRelationshipRows(group, id)
+	local relationships = mod.GetObjectRelationships(id, group.Name)
+	if relationships.Message then
+		table.insert(rows, { Group = group, RelationshipLabel = relationships.Message })
+	end
+	if not relationships.Map then
+		return
+	end
+	for _, section in ipairs({
+		{ Label = "Parents", Ids = relationships.Parents },
+		{ Label = "Children", Ids = relationships.Children },
+		{ Label = "Attached to", Ids = relationships.AttachedTo },
+	}) do
+		table.insert(rows, {
+			Group = group, RelationshipLabel = section.Label .. " (" .. #section.Ids .. ")",
+		})
+		for _, relatedId in ipairs(section.Ids) do
+			table.insert(rows, { Group = group, RelationshipId = relatedId, RelationshipMap = relationships.Map })
+		end
+	end
 end
 
 local function appendObjectRows(group)
@@ -68,6 +83,9 @@ local function appendObjectRows(group)
 			local idIndex = sortMode == "ID (newest first)" and (#ids - index + 1) or index
 			local id = ids[idIndex]
 			table.insert(rows, { Group = group, Id = id })
+			if expandedRelationships[id] then
+				appendRelationshipRows(group, id)
+			end
 		end
 	end
 end
@@ -140,7 +158,6 @@ local function drawObjectRow(row)
 			rom.ImGui.Indent()
 		end
 		local selected, changed = rom.ImGui.Checkbox("##group", row.SelectedCount == row.ObjectCount)
-		drawTooltip("Select or deselect all types in this group matching the current filter")
 		if changed then
 			mod.SelectObjectTypes(row.Groups, selected)
 		end
@@ -163,22 +180,49 @@ local function drawObjectRow(row)
 	rom.ImGui.Indent()
 	rom.ImGui.Indent()
 	rom.ImGui.PushID(group.Name)
-	if id then
+	if row.RelationshipLabel or row.RelationshipId then
 		rom.ImGui.Indent()
+		rom.ImGui.Indent()
+		rom.ImGui.AlignTextToFramePadding()
+		if row.RelationshipId then
+			local object = mod.DescribeRelatedObject(row.RelationshipMap, row.RelationshipId)
+			local text = object.Id .. " " .. object.Name .. " - " .. object.Status
+			if object.LiveName then
+				text = text .. " (" .. object.LiveName .. ")"
+			end
+			if object.ExportedRecord then
+				text = text .. " - no map record"
+			end
+			rom.ImGui.Text(text)
+		else
+			rom.ImGui.Text(row.RelationshipLabel)
+		end
+		rom.ImGui.Unindent()
+		rom.ImGui.Unindent()
+	elseif id then
+		rom.ImGui.Indent()
+		rom.ImGui.PushID(id)
+		if rom.ImGui.SmallButton("Log") then
+			mod.LogObjectRelationships(id, group.Name)
+		end
+		rom.ImGui.SameLine()
+		local expanded = expandedRelationships[id] == true
+		rom.ImGui.SetNextItemOpen(expanded)
+		local value = rom.ImGui.TreeNodeEx("##relationships",
+			rom.ImGuiTreeNodeFlags.NoTreePushOnOpen + rom.ImGuiTreeNodeFlags.FramePadding)
+		if value ~= expanded then
+			expandedRelationships[id] = value or nil
+			rowsDirty = true
+		end
+		rom.ImGui.SameLine()
 		local selected, changed = rom.ImGui.Checkbox(group.IdText[id], mod.IsObjectSelected(group.Name, id))
 		if changed then
 			mod.SelectObjectId(id, selected)
 		end
-		rom.ImGui.SameLine()
-		rom.ImGui.PushID(id)
-		if rom.ImGui.SmallButton("Log relationships") then
-			mod.LogObjectRelationships(id, group.Name)
-		end
-		drawTooltip("Log authored map parents, children and movement attachments, not live relationship changes")
 		rom.ImGui.PopID()
 		rom.ImGui.SameLine()
 		local distance = mod.ObjectDistances[id]
-		local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable - refresh"
+		local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable"
 		local cursorX = rom.ImGui.GetCursorPosX()
 		local availableWidth = rom.ImGui.GetContentRegionAvail()
 		local textWidth = rom.ImGui.CalcTextSize(text)
@@ -216,6 +260,11 @@ local function drawObjectRow(row)
 end
 
 local function drawObjectList(groups)
+	if relationshipMapName ~= mod.CurrentMapName then
+		relationshipMapName = mod.CurrentMapName
+		expandedRelationships = {}
+		rowsDirty = true
+	end
 	if rowsDirty or rowGroups ~= groups or rowSelectionVersion ~= mod.ObjectSelectionVersion then
 		rebuildRows(groups)
 	end
@@ -234,7 +283,6 @@ end
 -- #region Controls
 local function drawContents()
 	local enabled, changed = rom.ImGui.Checkbox("Show selected IDs", config.enabled)
-	drawTooltip(configDescriptions.enabled)
 	if changed then
 		config.enabled = enabled
 		mod.SyncObjectLabels()
@@ -242,26 +290,22 @@ local function drawContents()
 
 	local value
 	value, changed = rom.ImGui.Checkbox("Set player invulnerable", mod.PlayerInvulnerable)
-	drawTooltip("Session-only debug setting: use normal player invulnerability and log blocked hits; pure damage can bypass it")
 	if changed then
 		mod.SetPlayerInvulnerability(value)
 	end
 	if rom.ImGui.CollapsingHeader("Label settings") then
 		local rebuild = false
 		value, changed = rom.ImGui.SliderInt("Font size", config.fontSize, 10, 48)
-		drawTooltip(configDescriptions.fontSize)
 		if changed then
 			config.fontSize = value
 			rebuild = true
 		end
 		value, changed = rom.ImGui.SliderInt("Vertical offset", config.offsetY, -200, 100)
-		drawTooltip(configDescriptions.offsetY)
 		if changed then
 			config.offsetY = value
 			rebuild = true
 		end
 		value, changed = rom.ImGui.Checkbox("Include type names", config.showTypeNames)
-		drawTooltip(configDescriptions.showTypeNames)
 		if changed then
 			config.showTypeNames = value
 			rebuild = true
@@ -271,15 +315,14 @@ local function drawContents()
 		end
 	end
 
-	rom.ImGui.Text("Room " .. mod.CurrentMapName .. " has " .. mod.ObjectCount .. " objects with " .. #mod.ObjectGroups .. " types")
-	local labelStatus = mod.ObjectLabelCount .. "/" .. mod.ObjectLabelLimit .. " labels are shown, limited by the engine"
+	rom.ImGui.Text(mod.CurrentMapName .. " | " .. mod.ObjectCount .. " objects | " .. #mod.ObjectGroups .. " types")
+	local labelStatus = mod.ObjectLabelCount .. "/" .. mod.ObjectLabelLimit .. " labels"
 	if mod.ObjectLabelOmittedCount > 0 then
-		labelStatus = labelStatus .. " (" .. mod.ObjectLabelOmittedCount .. " additional objects selected)"
+		labelStatus = labelStatus .. " (" .. mod.ObjectLabelOmittedCount .. " more selected)"
 	end
 	rom.ImGui.Text(labelStatus)
-	drawTooltip("The world label cap leaves room in the game's shared text-box pool; lowest selected IDs are shown first, and selection and console logging remain unlimited")
 	if mod.ObjectRefreshRequested then
-		rom.ImGui.Text("Map objects changed - refresh to update the list")
+		rom.ImGui.Text("List out of date")
 	end
 
 	rom.ImGui.Text("Sort")
@@ -306,7 +349,7 @@ local function drawContents()
 	rom.ImGui.SameLine()
 	local deselectAll = rom.ImGui.Button("Deselect all")
 
-	rom.ImGui.Text("Filter by type, ID, category or source file:")
+	rom.ImGui.Text("Filter: type, ID, category or source file")
 	filter = rom.ImGui.InputText("##filter", filter, 256)
 	local groups = mod.GetObjectGroups(filter)
 	if showFiltered then
@@ -328,7 +371,7 @@ end
 -- #region Registration
 rom.gui.add_to_menu_bar(function()
 	if rom.ImGui.BeginMenu(windowName) then
-		rom.ImGui.Text("Open the inspector from the Windows menu")
+		rom.ImGui.Text("Open from the Windows menu")
 		if rom.ImGui.Button("Deselect all") then
 			mod.HideAllObjects()
 		end
