@@ -170,6 +170,13 @@ local function drawObjectRow(row)
 			mod.SelectObjectId(id, selected)
 		end
 		rom.ImGui.SameLine()
+		rom.ImGui.PushID(id)
+		if rom.ImGui.SmallButton("Log relationships") then
+			mod.LogObjectRelationships(id, group.Name)
+		end
+		drawTooltip("Log authored map parents, children and movement attachments, not live relationship changes")
+		rom.ImGui.PopID()
+		rom.ImGui.SameLine()
 		local distance = mod.ObjectDistances[id]
 		local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable - refresh"
 		local cursorX = rom.ImGui.GetCursorPosX()

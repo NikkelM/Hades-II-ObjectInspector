@@ -47,6 +47,7 @@ local function on_ready()
 
 	import "Scripts/Utils.lua"
 	import "Scripts/Inspector.lua"
+	import "Scripts/Relationships.lua"
 	import "Scripts/SjsonHooks.lua"
 	import "Scripts/RoomLogic.lua"
 	import "Scripts/CombatLogic.lua"
