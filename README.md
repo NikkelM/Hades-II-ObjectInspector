@@ -14,9 +14,9 @@ Each type has a separate colour assigned for easier identification in-game.
 
 You can also enable type-name labels and adjust the font size and vertical offset.
 
-Use `Log filtered`, `Log selected`, or `Log type` to write the corresponding details to the console.
-Use `Refresh now` to update discovered objects, including membership of selected types after spawns.
-If enabled, automatic refresh runs whenever the inspector opens or becomes visible.
+Use `Log filtered`, `Log selected`, or each type's `Log` button to write the corresponding details to the console.
+Use `Refresh list` to update discovered objects, including spawned enemies.
+The list will always refresh when you reopen the imgui menu.
 
 Selected types are retained across map loads, while individual-ID choices reset at each map transition as the game may re-assign them.
 Selections aren't persisted between game restarts.

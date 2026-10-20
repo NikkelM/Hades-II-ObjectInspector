@@ -2,8 +2,6 @@ local windowName = "Object Inspector"
 local configDescriptions = mod.ConfigDescriptions
 local wasVisible = false
 local filter = ""
-local sortMode = config.sortMode
-mod.ObjectDistanceSort = sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
 local lastRefresh = 0
 local lastMapName
 local expandedTypes = mod.ExpandedObjectTypes
@@ -44,8 +42,9 @@ end
 local function appendObjectRows(group)
 	table.insert(rows, { Group = group })
 	if expandedTypes[group.Name] then
+		local sortMode = config.sortMode
 		local ids = group.Ids
-		if mod.ObjectDistanceSort then
+		if mod.IsObjectDistanceSort(sortMode) then
 			ids = {}
 			for _, id in ipairs(group.Ids) do
 				table.insert(ids, id)
@@ -278,17 +277,11 @@ local function drawContents()
 
 	rom.ImGui.Text("Sort")
 	rom.ImGui.SameLine()
+	local sortMode = config.sortMode
 	if rom.ImGui.BeginCombo("##sort", sortMode) then
-		for _, option in ipairs({ "Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)", "ID (newest first)", "Distance (closest first)", "Distance (farthest first)" }) do
+		for _, option in ipairs(mod.ObjectSortModes) do
 			if rom.ImGui.Selectable(option, sortMode == option) then
-				sortMode = option
-				config.sortMode = option
-				local distanceSort = option == "Distance (closest first)" or option == "Distance (farthest first)"
-				local needsSnapshot = distanceSort and not mod.ObjectDistanceSort
-				mod.ObjectDistanceSort = distanceSort
-				if needsSnapshot then
-					mod.RefreshObjectDistances()
-				end
+				mod.SetObjectSortMode(option)
 			end
 		end
 		rom.ImGui.EndCombo()
@@ -308,7 +301,7 @@ local function drawContents()
 
 	rom.ImGui.Text("Filter by type, ID, category or source file:")
 	filter = rom.ImGui.InputText("##filter", filter, 256)
-	local groups = mod.GetObjectGroups(filter, sortMode)
+	local groups = mod.GetObjectGroups(filter)
 	if showFiltered then
 		mod.SelectObjectTypes(groups, true)
 	end

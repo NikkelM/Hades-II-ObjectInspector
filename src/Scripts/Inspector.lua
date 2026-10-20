@@ -27,9 +27,30 @@ mod.ObjectRefreshRequested = true
 mod.ObjectDataVersion = 0
 mod.ObjectSelectionVersion = 0
 mod.ObjectDistances = {}
-mod.ObjectDistanceSort = false
 mod.ExpandedObjectTypes = {}
 mod.DistancePlayerId = nil
+-- #endregion
+
+-- #region Sort modes
+mod.ObjectSortModes = {
+	"Count (most first)", "Count (fewest first)", "Name (A-Z)", "Name (Z-A)",
+	"ID (newest first)", "Distance (closest first)", "Distance (farthest first)",
+}
+
+---@param sortMode string
+---@return boolean
+function mod.IsObjectDistanceSort(sortMode)
+	return sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
+end
+
+---@param sortMode string
+function mod.SetObjectSortMode(sortMode)
+	local wasDistanceSort = mod.IsObjectDistanceSort(config.sortMode)
+	config.sortMode = sortMode
+	if mod.IsObjectDistanceSort(sortMode) and not wasDistanceSort then
+		mod.RefreshObjectDistances()
+	end
+end
 -- #endregion
 
 -- #region Discovery
@@ -146,6 +167,7 @@ end
 function mod.RefreshObjectDistances(openedGroup)
 	local hero = game.CurrentRun and game.CurrentRun.Hero
 	local playerId = hero and hero.ObjectId
+	local distanceSort = mod.IsObjectDistanceSort(config.sortMode)
 	if not openedGroup or mod.DistancePlayerId ~= playerId then
 		mod.ObjectDistances = {}
 		for _, group in ipairs(mod.ObjectGroups) do
@@ -155,7 +177,7 @@ function mod.RefreshObjectDistances(openedGroup)
 	mod.DistancePlayerId = playerId
 	if mod.DistancePlayerId then
 		for _, group in ipairs(openedGroup and { openedGroup } or mod.ObjectGroups) do
-			if openedGroup or mod.ObjectDistanceSort or mod.ExpandedObjectTypes[group.Name] then
+			if openedGroup or distanceSort or mod.ExpandedObjectTypes[group.Name] then
 				group.NearestDistance = nil
 				for _, id in ipairs(group.Ids) do
 					mod.ObjectDistances[id] = nil
@@ -176,15 +198,15 @@ function mod.RefreshObjectDistances(openedGroup)
 end
 
 ---@param filter string
----@param sortMode string
 ---@return ObjectInspectorGroup[]
-function mod.GetObjectGroups(filter, sortMode)
+function mod.GetObjectGroups(filter)
+	local sortMode = config.sortMode
 	filter = filter:lower()
 	if filter == cachedFilter and sortMode == cachedSortMode and cachedVersion == mod.ObjectDataVersion then
 		return cachedGroups
 	end
 	local result = {}
-	local distanceSort = sortMode == "Distance (closest first)" or sortMode == "Distance (farthest first)"
+	local distanceSort = mod.IsObjectDistanceSort(sortMode)
 	local searchIds = filter:match("^%d+$") ~= nil
 	for _, group in ipairs(mod.ObjectGroups) do
 		local matches = group.SearchText:find(filter, 1, true) ~= nil
