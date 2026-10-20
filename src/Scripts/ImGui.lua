@@ -1,6 +1,8 @@
 local windowName = "Object Inspector"
 local wasVisible = false
 local filter = ""
+local showHierarchy = false
+local includeMissing = false
 local lastRefresh = 0
 local lastMapName
 local expandedTypes = mod.ExpandedObjectTypes
@@ -8,6 +10,8 @@ local expandedCategories = {}
 local expandedSources = {}
 local expandedRelationships = {}
 local relationshipMapName
+local expandedHierarchy = {}
+local hierarchyExpansionInitialized = false
 local rows = {}
 local rowGroups
 local rowsDirty = true
@@ -19,6 +23,8 @@ local function resetExpandedGroups()
 	expandedCategories = {}
 	expandedSources = {}
 	expandedRelationships = {}
+	expandedHierarchy = {}
+	hierarchyExpansionInitialized = false
 	for name in pairs(expandedTypes) do
 		expandedTypes[name] = nil
 	end
@@ -30,6 +36,59 @@ local function resetExpandedGroups()
 		end
 	end
 	rowsDirty = true
+end
+
+local function getHierarchyGroups(groups)
+	local hierarchy = mod.GetObjectHierarchy(groups, includeMissing, filter)
+	if hierarchy.Message then
+		table.insert(rows, { HierarchyLabel = hierarchy.Message })
+	end
+	if not hierarchyExpansionInitialized then
+		for _, node in pairs(hierarchy.Nodes) do
+			if node.Group and mod.IsObjectSelected(node.Name, node.Id) then
+				local parent = node.Parent
+				while parent and not expandedHierarchy[parent.Id] do
+					expandedHierarchy[parent.Id] = true
+					parent = parent.Parent
+				end
+			end
+		end
+	end
+	local hierarchyGroups = mod.GetHierarchyGroups(hierarchy)
+	if not hierarchyExpansionInitialized then
+		for _, group in ipairs(hierarchyGroups) do
+			if group.SelectedCount > 0 then
+				expandedCategories[group.Category] = true
+				expandedSources[group.Category .. ":" .. group.Source] = true
+				expandedTypes[group.Name] = true
+			end
+		end
+		hierarchyExpansionInitialized = true
+	end
+	return hierarchyGroups
+end
+
+local function appendHierarchyRows(group)
+	table.insert(rows, { Group = group })
+	if not expandedTypes[group.Name] and filter == "" then
+		return
+	end
+	local stack = {}
+	for index = #group.Roots, 1, -1 do
+		table.insert(stack, { Node = group.Roots[index], Depth = 4 })
+	end
+	while #stack > 0 do
+		local row = table.remove(stack)
+		local node = row.Node
+		if node.Visible then
+			table.insert(rows, { HierarchyNode = node, Depth = row.Depth })
+			if filter ~= "" or expandedHierarchy[node.Id] then
+				for index = #node.Children, 1, -1 do
+					table.insert(stack, { Node = node.Children[index], Depth = row.Depth + 1 })
+				end
+			end
+		end
+	end
 end
 
 local function appendRelationshipRows(group, id)
@@ -92,6 +151,10 @@ end
 
 local function rebuildRows(groups)
 	rows = {}
+	local inputGroups = groups
+	if showHierarchy then
+		groups = getHierarchyGroups(groups)
+	end
 	local categories = {}
 	for _, group in ipairs(groups) do
 		local category = categories[group.Category]
@@ -120,7 +183,7 @@ local function rebuildRows(groups)
 				Label = name .. " (" .. #category.Groups .. " types, " .. category.ObjectCount
 					.. " objects, " .. category.SelectedCount .. " selected)",
 			})
-			if expandedCategories[name] == true then
+			if expandedCategories[name] == true or (showHierarchy and filter ~= "") then
 				local sourceNames = {}
 				for source in pairs(category.Sources) do
 					table.insert(sourceNames, source)
@@ -134,38 +197,119 @@ local function rebuildRows(groups)
 						Label = sourceName .. " (" .. #source.Groups .. " types, " .. source.ObjectCount
 							.. " objects, " .. source.SelectedCount .. " selected)",
 					})
-					if expandedSources[name .. ":" .. sourceName] == true then
+					if expandedSources[name .. ":" .. sourceName] == true or (showHierarchy and filter ~= "") then
 						for _, group in ipairs(source.Groups) do
-							appendObjectRows(group)
+							if group.Roots then
+								appendHierarchyRows(group)
+							else
+								appendObjectRows(group)
+							end
 						end
 					end
 				end
 			end
 		end
 	end
-	rowGroups = groups
+	rowGroups = inputGroups
 	rowSelectionVersion = mod.ObjectSelectionVersion
 	rowsDirty = false
 end
 
+local function selectGroups(groups, selected)
+	if showHierarchy then
+		local ids = {}
+		for _, group in ipairs(groups) do
+			for _, id in ipairs(group.Ids) do
+				table.insert(ids, id)
+			end
+		end
+		mod.SelectObjectIds(ids, selected)
+	else
+		mod.SelectObjectTypes(groups, selected)
+	end
+end
+
+local function drawObjectDistance(id)
+	local distance = mod.ObjectDistances[id]
+	local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable"
+	local cursorX = rom.ImGui.GetCursorPosX()
+	local availableWidth = rom.ImGui.GetContentRegionAvail()
+	local textWidth = rom.ImGui.CalcTextSize(text)
+	rom.ImGui.SetCursorPosX(math.max(cursorX, cursorX + availableWidth - textWidth))
+	rom.ImGui.Text(text)
+end
+
+local function drawHierarchyRow(row)
+	if row.HierarchyLabel then
+		rom.ImGui.AlignTextToFramePadding()
+		rom.ImGui.Text(row.HierarchyLabel)
+		return
+	end
+	local node = row.HierarchyNode
+	for _ = 1, row.Depth do
+		rom.ImGui.Indent()
+	end
+	rom.ImGui.PushID(node.Id)
+	if node.Group then
+		local selected, changed = rom.ImGui.Checkbox("##selected",
+			#node.SelectionIds > 0 and node.SelectedCount == #node.SelectionIds)
+		if changed then
+			mod.SelectObjectIds(node.SelectionIds, selected)
+		end
+		rom.ImGui.SameLine()
+		if rom.ImGui.SmallButton("Log") then
+			mod.LogObjectRelationships(node.Id, node.Name)
+		end
+		rom.ImGui.SameLine()
+	end
+	if #node.Children > 0 then
+		local expanded = filter ~= "" or expandedHierarchy[node.Id] == true
+		rom.ImGui.SetNextItemOpen(expanded)
+		local value = rom.ImGui.TreeNodeEx("##children",
+			rom.ImGuiTreeNodeFlags.NoTreePushOnOpen + rom.ImGuiTreeNodeFlags.FramePadding)
+		if value ~= expanded and filter == "" then
+			expandedHierarchy[node.Id] = value or nil
+			rowsDirty = true
+		end
+		rom.ImGui.SameLine()
+	end
+	local label = node.Id .. " " .. node.Name
+	rom.ImGui.AlignTextToFramePadding()
+	if node.Group then
+		rom.ImGui.Text(label)
+		rom.ImGui.SameLine()
+		drawObjectDistance(node.Id)
+	else
+		rom.ImGui.Text(label .. " (missing)")
+	end
+	rom.ImGui.PopID()
+	for _ = 1, row.Depth do
+		rom.ImGui.Unindent()
+	end
+end
+
 local function drawObjectRow(row)
+	if row.HierarchyNode or row.HierarchyLabel then
+		drawHierarchyRow(row)
+		return
+	end
 	if not row.Group then
 		local key = row.Category .. (row.Source and (":" .. row.Source) or "")
 		local states = row.Source and expandedSources or expandedCategories
-		local expanded = states[key] == true
+		local expanded = states[key] == true or (showHierarchy and filter ~= "")
 		rom.ImGui.PushID(key)
 		if row.Source then
 			rom.ImGui.Indent()
 		end
-		local selected, changed = rom.ImGui.Checkbox("##group", row.SelectedCount == row.ObjectCount)
+		local selected, changed = rom.ImGui.Checkbox("##group", row.ObjectCount > 0 and row.SelectedCount == row.ObjectCount)
 		if changed then
-			mod.SelectObjectTypes(row.Groups, selected)
+			selectGroups(row.Groups, selected)
 		end
 		rom.ImGui.SameLine()
 		rom.ImGui.SetNextItemOpen(expanded)
 		local value = rom.ImGui.TreeNodeEx(row.Label .. "###category",
 			rom.ImGuiTreeNodeFlags.NoTreePushOnOpen + rom.ImGuiTreeNodeFlags.FramePadding)
-		if value ~= expanded then
+		if value ~= expanded and not (showHierarchy and filter ~= "") then
 			states[key] = value
 			rowsDirty = true
 		end
@@ -179,8 +323,9 @@ local function drawObjectRow(row)
 	local group, id = row.Group, row.Id
 	rom.ImGui.Indent()
 	rom.ImGui.Indent()
-	rom.ImGui.PushID(group.Name)
+	rom.ImGui.PushID(group.Category .. ":" .. group.Source .. ":" .. group.Name)
 	if row.RelationshipLabel or row.RelationshipId then
+		rom.ImGui.Indent()
 		rom.ImGui.Indent()
 		rom.ImGui.Indent()
 		rom.ImGui.AlignTextToFramePadding()
@@ -199,9 +344,16 @@ local function drawObjectRow(row)
 		end
 		rom.ImGui.Unindent()
 		rom.ImGui.Unindent()
+		rom.ImGui.Unindent()
 	elseif id then
 		rom.ImGui.Indent()
+		rom.ImGui.Indent()
 		rom.ImGui.PushID(id)
+		local selected, changed = rom.ImGui.Checkbox("##selected", mod.IsObjectSelected(group.Name, id))
+		if changed then
+			mod.SelectObjectId(id, selected)
+		end
+		rom.ImGui.SameLine()
 		if rom.ImGui.SmallButton("Log") then
 			mod.LogObjectRelationships(id, group.Name)
 		end
@@ -215,42 +367,40 @@ local function drawObjectRow(row)
 			rowsDirty = true
 		end
 		rom.ImGui.SameLine()
-		local selected, changed = rom.ImGui.Checkbox(group.IdText[id], mod.IsObjectSelected(group.Name, id))
-		if changed then
-			mod.SelectObjectId(id, selected)
-		end
+		rom.ImGui.AlignTextToFramePadding()
+		rom.ImGui.Text(group.IdText[id])
 		rom.ImGui.PopID()
 		rom.ImGui.SameLine()
-		local distance = mod.ObjectDistances[id]
-		local text = distance and string.format("%.0f units to player", distance) or "Distance unavailable"
-		local cursorX = rom.ImGui.GetCursorPosX()
-		local availableWidth = rom.ImGui.GetContentRegionAvail()
-		local textWidth = rom.ImGui.CalcTextSize(text)
-		rom.ImGui.SetCursorPosX(math.max(cursorX, cursorX + availableWidth - textWidth))
-		rom.ImGui.Text(text)
+		drawObjectDistance(id)
+		rom.ImGui.Unindent()
 		rom.ImGui.Unindent()
 	else
 		local color = group.Color
 		rom.ImGui.TextColored(color[1], color[2], color[3], color[4], "o")
 		rom.ImGui.SameLine()
-		local selected, changed = rom.ImGui.Checkbox("##type", group.SelectedCount == #group.Ids)
+		local selected, changed = rom.ImGui.Checkbox("##type", #group.Ids > 0 and group.SelectedCount == #group.Ids)
 		if changed then
-			mod.SelectObjectTypes({ group }, selected)
+			selectGroups({ group }, selected)
 		end
 		rom.ImGui.SameLine()
 		if rom.ImGui.SmallButton("Log") then
-			mod.LogObjects({ group }, false)
+			mod.LogObjects(group.LogGroups or { group }, false)
 		end
 		rom.ImGui.SameLine()
-		rom.ImGui.SetNextItemOpen(expandedTypes[group.Name] == true)
+		local typeExpanded = expandedTypes[group.Name] == true or (group.Roots ~= nil and filter ~= "")
+		rom.ImGui.SetNextItemOpen(typeExpanded)
 		local expanded = rom.ImGui.TreeNodeEx(
 			group.Name .. " (" .. #group.Ids .. ", " .. group.SelectedCount .. " selected)###objects",
 			rom.ImGuiTreeNodeFlags.NoTreePushOnOpen)
-		if expanded ~= (expandedTypes[group.Name] == true) then
+		if expanded ~= typeExpanded and not (group.Roots and filter ~= "") then
 			expandedTypes[group.Name] = expanded or nil
 			rowsDirty = true
 			if expanded then
-				mod.RefreshObjectDistances(group)
+				if group.Roots then
+					mod.RefreshObjectDistances(nil, true)
+				else
+					mod.RefreshObjectDistances(group)
+				end
 			end
 		end
 	end
@@ -263,6 +413,8 @@ local function drawObjectList(groups)
 	if relationshipMapName ~= mod.CurrentMapName then
 		relationshipMapName = mod.CurrentMapName
 		expandedRelationships = {}
+		expandedHierarchy = {}
+		hierarchyExpansionInitialized = false
 		rowsDirty = true
 	end
 	if rowsDirty or rowGroups ~= groups or rowSelectionVersion ~= mod.ObjectSelectionVersion then
@@ -325,6 +477,26 @@ local function drawContents()
 		rom.ImGui.Text("List out of date")
 	end
 
+	value, changed = rom.ImGui.Checkbox("Show Hierarchy only", showHierarchy)
+	if changed then
+		showHierarchy = value
+		hierarchyExpansionInitialized = false
+		mod.RefreshObjects()
+		mod.RefreshObjectDistances(nil, showHierarchy)
+		rowsDirty = true
+	end
+	if showHierarchy then
+		rom.ImGui.SameLine()
+		value, changed = rom.ImGui.Checkbox("Include missing", includeMissing)
+		if changed then
+			includeMissing = value
+			hierarchyExpansionInitialized = false
+			rowsDirty = true
+		end
+		rom.ImGui.TextColored(1, 0.75, 0.2, 1,
+			"Only obstacles with parent, child or attached-to relationships are shown.")
+	end
+
 	rom.ImGui.Text("Sort")
 	rom.ImGui.SameLine()
 	local sortMode = config.sortMode
@@ -338,7 +510,8 @@ local function drawContents()
 	end
 
 	if rom.ImGui.Button("Refresh list") then
-		mod.RefreshObjects(true)
+		mod.RefreshObjects()
+		mod.RefreshObjectDistances(nil, showHierarchy)
 	end
 	rom.ImGui.SameLine()
 	local showFiltered = rom.ImGui.Button("Show filtered types")
@@ -352,11 +525,21 @@ local function drawContents()
 	rom.ImGui.Text("Filter: type, ID, category or source file")
 	filter = rom.ImGui.InputText("##filter", filter, 256)
 	local groups = mod.GetObjectGroups(filter)
+	local actionGroups = groups
+	if showHierarchy and (showFiltered or logFiltered) then
+		actionGroups = {}
+		local hierarchy = mod.GetObjectHierarchy(groups, includeMissing, filter)
+		for _, group in ipairs(mod.GetHierarchyGroups(hierarchy)) do
+			for _, logGroup in ipairs(group.LogGroups) do
+				table.insert(actionGroups, logGroup)
+			end
+		end
+	end
 	if showFiltered then
-		mod.SelectObjectTypes(groups, true)
+		selectGroups(actionGroups, true)
 	end
 	if logFiltered then
-		mod.LogObjects(groups, false)
+		mod.LogObjects(actionGroups, false)
 	end
 	if logSelected then
 		mod.LogObjects(mod.ObjectGroups, true)
@@ -392,7 +575,7 @@ rom.gui.add_always_draw_imgui(function()
 				if opening then
 					resetExpandedGroups()
 				end
-				mod.RefreshObjectDistances()
+				mod.RefreshObjectDistances(nil, showHierarchy)
 			end
 			drawContents()
 			rom.ImGui.End()

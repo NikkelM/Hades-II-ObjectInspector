@@ -68,6 +68,15 @@ function mod.RegisterObjectType(name, category, source)
 	objectType.Source = objectType.Source or source
 end
 
+---@param name string
+---@return string, string
+function mod.GetObjectTypeInfo(name)
+	local objectType = objectTypes[name] or {}
+	local cachedObjectType = mod.CachedObjectTypes[name] or {}
+	return objectType.Category or cachedObjectType.Category or "Other",
+		objectType.Source or cachedObjectType.Source or "Uncategorized"
+end
+
 local function getObjectTypeColor(name)
 	if not typeColors[name] then
 		colorCount = colorCount + 1
@@ -106,10 +115,7 @@ function mod.RefreshObjects(refreshDistances)
 			if name ~= "" then
 				activeObjects[id] = name
 				if not groupsByName[name] then
-					local objectType = objectTypes[name]
-					local cachedObjectType = mod.CachedObjectTypes[name] or {}
-					local category = objectType.Category or cachedObjectType.Category or "Other"
-					local source = objectType.Source or cachedObjectType.Source or "Uncategorized"
+					local category, source = mod.GetObjectTypeInfo(name)
 					groupsByName[name] = {
 						Name = name, SearchName = name:lower(), Ids = {}, IdText = {},
 						Category = category, Source = source,
@@ -164,7 +170,8 @@ function mod.RefreshObjects(refreshDistances)
 end
 
 ---@param openedGroup ObjectInspectorGroup|nil
-function mod.RefreshObjectDistances(openedGroup)
+---@param allGroups boolean|nil
+function mod.RefreshObjectDistances(openedGroup, allGroups)
 	local hero = game.CurrentRun and game.CurrentRun.Hero
 	local playerId = hero and hero.ObjectId
 	local distanceSort = mod.IsObjectDistanceSort(config.sortMode)
@@ -177,7 +184,7 @@ function mod.RefreshObjectDistances(openedGroup)
 	mod.DistancePlayerId = playerId
 	if mod.DistancePlayerId then
 		for _, group in ipairs(openedGroup and { openedGroup } or mod.ObjectGroups) do
-			if openedGroup or distanceSort or mod.ExpandedObjectTypes[group.Name] then
+			if allGroups or openedGroup or distanceSort or mod.ExpandedObjectTypes[group.Name] then
 				group.NearestDistance = nil
 				for _, id in ipairs(group.Ids) do
 					mod.ObjectDistances[id] = nil
@@ -197,6 +204,40 @@ function mod.RefreshObjectDistances(openedGroup)
 	cachedVersion = -1
 end
 
+---@param groups { Name: string, SearchName: string, Ids: integer[], NearestDistance: number|nil }[]
+function mod.SortObjectGroups(groups)
+	local sortMode = config.sortMode
+	local distanceSort = mod.IsObjectDistanceSort(sortMode)
+	table.sort(groups, function(a, b)
+		if distanceSort and a.NearestDistance ~= b.NearestDistance then
+			if a.NearestDistance == nil then
+				return false
+			elseif b.NearestDistance == nil then
+				return true
+			elseif sortMode == "Distance (closest first)" then
+				return a.NearestDistance < b.NearestDistance
+			end
+			return a.NearestDistance > b.NearestDistance
+		elseif sortMode == "ID (newest first)" and a.Ids[#a.Ids] ~= b.Ids[#b.Ids] then
+			if #a.Ids == 0 then
+				return false
+			elseif #b.Ids == 0 then
+				return true
+			end
+			return a.Ids[#a.Ids] > b.Ids[#b.Ids]
+		elseif sortMode == "Count (most first)" and #a.Ids ~= #b.Ids then
+			return #a.Ids > #b.Ids
+		elseif sortMode == "Count (fewest first)" and #a.Ids ~= #b.Ids then
+			return #a.Ids < #b.Ids
+		elseif sortMode == "Name (Z-A)" then
+			local left, right = a.SearchName, b.SearchName
+			return left > right or (left == right and a.Name > b.Name)
+		end
+		local left, right = a.SearchName, b.SearchName
+		return left < right or (left == right and a.Name < b.Name)
+	end)
+end
+
 ---@param filter string
 ---@return ObjectInspectorGroup[]
 function mod.GetObjectGroups(filter)
@@ -206,7 +247,6 @@ function mod.GetObjectGroups(filter)
 		return cachedGroups
 	end
 	local result = {}
-	local distanceSort = mod.IsObjectDistanceSort(sortMode)
 	local searchIds = filter:match("^%d+$") ~= nil
 	for _, group in ipairs(mod.ObjectGroups) do
 		local matches = group.SearchText:find(filter, 1, true) ~= nil
@@ -222,29 +262,7 @@ function mod.GetObjectGroups(filter)
 			table.insert(result, group)
 		end
 	end
-	table.sort(result, function(a, b)
-		if distanceSort and a.NearestDistance ~= b.NearestDistance then
-			if a.NearestDistance == nil then
-				return false
-			elseif b.NearestDistance == nil then
-				return true
-			elseif sortMode == "Distance (closest first)" then
-				return a.NearestDistance < b.NearestDistance
-			end
-			return a.NearestDistance > b.NearestDistance
-		elseif sortMode == "ID (newest first)" and a.Ids[#a.Ids] ~= b.Ids[#b.Ids] then
-			return a.Ids[#a.Ids] > b.Ids[#b.Ids]
-		elseif sortMode == "Count (most first)" and #a.Ids ~= #b.Ids then
-			return #a.Ids > #b.Ids
-		elseif sortMode == "Count (fewest first)" and #a.Ids ~= #b.Ids then
-			return #a.Ids < #b.Ids
-		elseif sortMode == "Name (Z-A)" then
-			local left, right = a.SearchName, b.SearchName
-			return left > right or (left == right and a.Name > b.Name)
-		end
-		local left, right = a.SearchName, b.SearchName
-		return left < right or (left == right and a.Name < b.Name)
-	end)
+	mod.SortObjectGroups(result)
 	cachedGroups, cachedFilter, cachedSortMode = result, filter, sortMode
 	cachedVersion = mod.ObjectDataVersion
 	return cachedGroups
@@ -277,18 +295,26 @@ function mod.SelectObjectTypes(groups, selected)
 	mod.SyncObjectLabels()
 end
 
----@param id integer
+---@param ids integer[]
 ---@param selected boolean
-function mod.SelectObjectId(id, selected)
-	local group = groupsById[id]
-	local wasSelected = mod.IsObjectSelected(group.Name, id)
-	selectionOverrides[id] = selected
-	selectedObjectIds[id] = selected and group or nil
-	if wasSelected ~= selected then
-		group.SelectedCount = group.SelectedCount + (selected and 1 or -1)
+function mod.SelectObjectIds(ids, selected)
+	for _, id in ipairs(ids) do
+		local group = groupsById[id]
+		local wasSelected = mod.IsObjectSelected(group.Name, id)
+		selectionOverrides[id] = selected
+		selectedObjectIds[id] = selected and group or nil
+		if wasSelected ~= selected then
+			group.SelectedCount = group.SelectedCount + (selected and 1 or -1)
+		end
 	end
 	mod.ObjectSelectionVersion = mod.ObjectSelectionVersion + 1
 	mod.SyncObjectLabels()
+end
+
+---@param id integer
+---@param selected boolean
+function mod.SelectObjectId(id, selected)
+	mod.SelectObjectIds({ id }, selected)
 end
 
 function mod.HideAllObjects()
@@ -409,7 +435,7 @@ end
 -- #endregion
 
 -- #region Console
----@param groups ObjectInspectorGroup[]
+---@param groups { Name: string, Ids: integer[] }[]
 ---@param selectedOnly boolean
 function mod.LogObjects(groups, selectedOnly)
 	rom.log.info("Object Inspector | " .. mod.CurrentMapName)
