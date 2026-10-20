@@ -7,14 +7,18 @@ The Object Inspector is a Hades II developer mod that can find and show all obst
 ## Usage
 
 Press `Insert` (or whatever keybind you configured) to open the imgui overlay, then choose `Windows` > `NikkelM-Object_Inspector` > `Object Inspector`.
-Sort types alphabetically or by item count, ascending or descending.
+Sort alphabetically or by item count, ascending or descending, by ID (newest first), or by distance (closest or farthest first).
 
 Use the per-type or individual-ID checkboxes to select objects for world-space ID labels.
 Each type has a separate colour assigned for easier identification in-game.
 
 You can also enable type-name labels and adjust the font size and vertical offset.
 
+Expand an object in the viewer to see its parent, child and attached-to details from the map definition.
+Enable `Show Hierarchy only` to nest children under parents within the category/source/type groups.
+
 Use `Log filtered`, `Log selected`, or each type's `Log` button to write the corresponding details to the console.
+Use each individual ID's `Log` button to write its relationships to the console.
 Use `Refresh list` to update discovered objects, including spawned enemies.
 The list will always refresh when you reopen the imgui menu.
 
