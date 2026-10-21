@@ -5,7 +5,7 @@ schemaVersion = "0.0.1"
 namespace = "NikkelM"
 name = "Object_Inspector"
 versionNumber = "0.1.0"
-description = "Hades II developer tool to inspect active obstacles and units on any map by showing their ObjectIds next to them. Can also log more details to the console. Has a number of sort and filter modes, and allows searching as well."
+description = "Hades II developer tool to inspect active obstacles and units on any map by showing their ObjectIds next to them. Includes sorting, filtering, showing hierarchies, and logging details to the console."
 websiteUrl = "https://github.com/NikkelM/Hades-II-ObjectInspector"
 containsNsfwContent = false
 
