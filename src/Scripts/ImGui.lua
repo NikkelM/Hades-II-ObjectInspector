@@ -173,6 +173,9 @@ local function rebuildRows(groups)
 		table.insert(source.Groups, group)
 		source.ObjectCount = source.ObjectCount + #group.Ids
 		source.SelectedCount = source.SelectedCount + group.SelectedCount
+		if group.NearestDistance and (not source.NearestDistance or group.NearestDistance < source.NearestDistance) then
+			source.NearestDistance = group.NearestDistance
+		end
 	end
 	for _, name in ipairs({ "Obstacles", "Units", "Other" }) do
 		local category = categories[name]
@@ -188,7 +191,20 @@ local function rebuildRows(groups)
 				for source in pairs(category.Sources) do
 					table.insert(sourceNames, source)
 				end
-				table.sort(sourceNames)
+				table.sort(sourceNames, function(a, b)
+					if config.sortMode == "Distance (closest first)" then
+						local left, right = category.Sources[a].NearestDistance, category.Sources[b].NearestDistance
+						if left ~= right then
+							if left == nil then
+								return false
+							elseif right == nil then
+								return true
+							end
+							return left < right
+						end
+					end
+					return a < b
+				end)
 				for _, sourceName in ipairs(sourceNames) do
 					local source = category.Sources[sourceName]
 					table.insert(rows, {
