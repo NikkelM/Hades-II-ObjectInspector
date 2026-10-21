@@ -28,5 +28,5 @@ Selections aren't persisted between game restarts.
 ## AI Usage Disclaimer
 
 This mod contains code created by Generative AI:
-- The majority of the mod's core logic was written by Generative AI, all code was manually reviewed and rewritten following the initial setup.
+- The majority of the mod's core logic was written by Generative AI.
 - The following AI model(s) were used to generate content included in this mod: GPT-6.1 Sol
