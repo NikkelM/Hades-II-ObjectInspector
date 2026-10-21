@@ -20,7 +20,7 @@ game.OnAnyLoad({ function()
 end })
 
 game.OnHit({ function(triggerArgs)
-	if mod.PlayerInvulnerable	and triggerArgs.Victim == game.CurrentRun.Hero and game.CurrentRun.Hero.InvulnerableFlags[_PLUGIN.guid] and not triggerArgs.PureDamage	and triggerArgs.DamageAmount ~= nil and triggerArgs.DamageAmount > 0 then
+	if mod.PlayerInvulnerable	and triggerArgs.Victim == game.CurrentRun.Hero and game.CurrentRun.Hero.InvulnerableFlags[_PLUGIN.guid] and not triggerArgs.PureDamage and triggerArgs.DamageAmount ~= nil and triggerArgs.DamageAmount > 0 then
 		rom.log.warning("Object Inspector | Damage skipped: \"Set player invulnerable\" is enabled in ImGui")
 	end
 end })
